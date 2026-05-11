@@ -254,3 +254,32 @@ def run_scoring(prices, fund_df, nlp_df, val_df, ml_preds, perfil="moderado"):
     snap["recomendacao"] = snap["score"].apply(rec)
     snap["rank"] = snap["score"].rank(ascending=False, method="min").astype(int)
     return snap.sort_values("rank")
+def run_asset_manager_analysis(prices, confidence_level=0.95):
+    # Processamento de retornos
+    df_pivot = prices.pivot(index='data', columns='ticker', values='preco').dropna()
+    returns = df_pivot.pct_change().dropna()
+    
+    # 1. Matriz de Correlação (Fundamental para Diversificação)
+    corr_matrix = returns.corr()
+    
+    # 2. Cálculo de VaR e CVaR Histórico (Métricas de Cauda)
+    # Simula uma carteira EW (Equally Weighted) para métrica base
+    portfolio_returns = returns.mean(axis=1)
+    var_95 = np.percentile(portfolio_returns, (1 - confidence_level) * 100)
+    cvar_95 = portfolio_returns[portfolio_returns <= var_95].mean()
+    
+    # 3. Beta do Setor (Simplificado usando a média do universo como benchmark)
+    benchmark_ret = returns.mean(axis=1)
+    betas = {}
+    for col in returns.columns:
+        cov = np.cov(returns[col], benchmark_ret)[0][1]
+        var = np.var(benchmark_ret)
+        betas[col] = cov / var
+        
+    return {
+        "corr": corr_matrix,
+        "var": var_95,
+        "cvar": cvar_95,
+        "betas": betas,
+        "returns": returns
+    }
