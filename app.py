@@ -219,6 +219,63 @@ with tab6:
             with st.spinner(f"Analisando {tk}..."):
                 analysis = generate_company_analysis(row.to_dict())
             st.markdown(analysis)
+with tab7:
+    st.header("🗂️ Asset Management & Risk Control")
+    
+    if st.session_state.get("prices") is not None:
+        risk_data = run_asset_manager_analysis(st.session_state.prices)
+        
+        # --- LINHA 1: Métricas de Risco de Cauda ---
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("VaR Histórico Diário (95%)", f"{risk_data['var']:.2%}", 
+                      help="Potencial de perda máxima em 95% dos dias.")
+        with col2:
+            st.metric("CVaR (Expected Shortfall)", f"{risk_data['cvar']:.2%}",
+                      help="Média das perdas caso o VaR seja ultrapassado (Risco de Cauda).")
+        with col3:
+            avg_beta = np.mean(list(risk_data['betas'].values()))
+            st.metric("Beta Médio da Carteira", f"{avg_beta:.2f}",
+                      help="Sensibilidade da carteira em relação ao mercado analisado.")
+
+        st.divider()
+
+        # --- LINHA 2: Análise de Correlação e Alocação ---
+        c_left, c_right = st.columns([2, 1])
+        
+        with c_left:
+            st.subheader("Matriz de Correlação Asset-Level")
+            fig_corr = px.imshow(risk_data['corr'], 
+                                 text_auto=".2f", 
+                                 color_continuous_scale='RdBu_r',
+                                 aspect="auto")
+            fig_corr.update_layout(template="plotly_dark")
+            st.plotly_chart(fig_corr, use_container_width=True)
+            st.info("💡 Gestores buscam correlações baixas (azul) para maximizar o benefício da diversificação.")
+
+        with c_right:
+            st.subheader("Exposição por Ticker (Beta)")
+            beta_df = pd.DataFrame.from_dict(risk_data['betas'], orient='index', columns=['Beta']).sort_values('Beta')
+            fig_beta = px.bar(beta_df, x='Beta', orientation='h', 
+                               color='Beta', color_continuous_scale='Viridis')
+            fig_beta.update_layout(template="plotly_dark", showlegend=False)
+            st.plotly_chart(fig_beta, use_container_width=True)
+
+        # --- LINHA 3: Stress Test Simples ---
+        st.subheader("⚠️ Stress Test (Cenários Históricos)")
+        st.write("Impacto estimado na carteira em eventos de estresse:")
+        
+        stress_scenarios = {
+            "Crise 2008 (Proxy -5%)": -0.05,
+            "Circuit Breaker (Proxy -10%)": -0.10,
+            "Cenário Otimista (+3%)": 0.03
+        }
+        
+        s_cols = st.columns(len(stress_scenarios))
+        for i, (name, impact) in enumerate(stress_scenarios.items()):
+            # Cálculo simplificado: impacto * beta médio
+            est_impact = impact * avg_beta
+            s_cols[i].metric(name, f"{est_impact:+.2%}")
 
 st.sidebar.divider()
 st.sidebar.caption("AI Equity Analyst v1.0 - FGV 2026")
