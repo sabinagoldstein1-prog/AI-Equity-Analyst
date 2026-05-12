@@ -1,6 +1,5 @@
 """
-engine.py — Motor do Agente de IA (v2 — simplificado)
-Tools: precos, fundamentos, ML, preditivo, trading, monte carlo, scoring
+engine.py — Motor do Agente de IA (v3)
 """
 import warnings, numpy as np, pandas as pd, yfinance as yf
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
@@ -19,7 +18,7 @@ def safe_div(a, b):
         return a / b
     except: return np.nan
 
-# ═══ TOOL 1: PRECOS ═══
+# === TOOL 1: PRECOS ===
 def fetch_prices(tickers, start="2021-01-01"):
     raw = yf.download(tickers, start=start, auto_adjust=True, progress=False)["Close"]
     if isinstance(raw, pd.Series): raw = raw.to_frame(name=tickers[0])
@@ -35,47 +34,51 @@ def fetch_prices(tickers, start="2021-01-01"):
     p["drawdown"] = g["preco"].transform(lambda x: (x - x.cummax()) / x.cummax())
     return p
 
-# ═══ TOOL 2: FUNDAMENTOS ═══
+# === TOOL 2: FUNDAMENTOS ===
 def fetch_fundamentals(tickers):
-    _default = {"ticker":"","nome":"?","setor":"?","preco":np.nan,"marketCap":np.nan,
-                "shares":np.nan,"P_L":np.nan,"P_VP":np.nan,"EV_EBITDA":np.nan,
-                "EV":np.nan,"lucro":np.nan,"pl_equity":np.nan,"totalDebt":np.nan,
-                "summary":"","div_yield":np.nan,"profitMargins":np.nan,
-                "returnOnEquity":np.nan,"revenueGrowth":np.nan,"ebitdaMargins":np.nan,
-                "debtToEquity":np.nan}
+    """Busca fundamentos do Yahoo Finance. Nunca retorna ? ou None nas colunas principais."""
     rows = []
     for t in tickers:
+        r = {"ticker": t, "nome": t.replace(".SA",""), "setor": "-",
+             "preco": np.nan, "marketCap": np.nan, "shares": np.nan,
+             "P_L": np.nan, "P_VP": np.nan, "EV_EBITDA": np.nan,
+             "EV": np.nan, "lucro": np.nan, "pl_equity": np.nan,
+             "totalDebt": np.nan, "summary": "", "div_yield": np.nan,
+             "profitMargins": np.nan, "returnOnEquity": np.nan,
+             "revenueGrowth": np.nan, "ebitdaMargins": np.nan,
+             "debtToEquity": np.nan}
         try:
             info = yf.Ticker(t).info
-            r = dict(_default)
-            r["ticker"] = t
-            r["nome"] = info.get("shortName", t)
-            r["setor"] = info.get("sector", "?")
-            r["preco"] = info.get("currentPrice") or info.get("previousClose") or np.nan
-            r["marketCap"] = info.get("marketCap") or np.nan
-            r["shares"] = info.get("sharesOutstanding") or info.get("floatShares") or np.nan
-            r["P_L"] = info.get("trailingPE") or np.nan
-            r["P_VP"] = info.get("priceToBook") or np.nan
-            r["EV_EBITDA"] = info.get("enterpriseToEbitda") or np.nan
-            r["EV"] = info.get("enterpriseValue") or np.nan
-            r["totalDebt"] = info.get("totalDebt") or np.nan
-            r["div_yield"] = info.get("dividendYield") or np.nan
-            r["profitMargins"] = info.get("profitMargins") or np.nan
-            r["returnOnEquity"] = info.get("returnOnEquity") or np.nan
-            r["revenueGrowth"] = info.get("revenueGrowth") or np.nan
-            r["ebitdaMargins"] = info.get("ebitdaMargins") or np.nan
-            r["debtToEquity"] = info.get("debtToEquity") or np.nan
-            r["summary"] = (info.get("longBusinessSummary","") or "").lower()
+            if not info or not isinstance(info, dict):
+                rows.append(r)
+                continue
+            r["nome"] = str(info.get("shortName") or info.get("longName") or t.replace(".SA",""))
+            r["setor"] = str(info.get("sector") or info.get("industry") or "-")
+            r["preco"] = float(info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or np.nan)
+            r["marketCap"] = float(info.get("marketCap") or np.nan)
+            r["shares"] = float(info.get("sharesOutstanding") or info.get("floatShares") or np.nan)
+            r["P_L"] = float(info.get("trailingPE") or info.get("forwardPE") or np.nan)
+            r["P_VP"] = float(info.get("priceToBook") or np.nan)
+            r["EV_EBITDA"] = float(info.get("enterpriseToEbitda") or np.nan)
+            r["EV"] = float(info.get("enterpriseValue") or np.nan)
+            r["totalDebt"] = float(info.get("totalDebt") or np.nan)
+            r["div_yield"] = float(info.get("dividendYield") or np.nan)
+            r["profitMargins"] = float(info.get("profitMargins") or np.nan)
+            r["returnOnEquity"] = float(info.get("returnOnEquity") or np.nan)
+            r["revenueGrowth"] = float(info.get("revenueGrowth") or np.nan)
+            r["ebitdaMargins"] = float(info.get("ebitdaMargins") or np.nan)
+            r["debtToEquity"] = float(info.get("debtToEquity") or np.nan)
+            r["summary"] = str(info.get("longBusinessSummary") or "").lower()
             r["lucro"] = safe_div(r["marketCap"], r["P_L"])
             r["pl_equity"] = safe_div(r["marketCap"], r["P_VP"])
-            if pd.isna(r["EV_EBITDA"]) and pd.notna(r["EV"]) and pd.notna(r["lucro"]) and r["lucro"]>0:
+            if pd.isna(r["EV_EBITDA"]) and pd.notna(r["EV"]) and pd.notna(r["lucro"]) and r["lucro"] > 0:
                 r["EV_EBITDA"] = safe_div(r["EV"], r["lucro"])
-            rows.append(r)
-        except:
-            d = dict(_default); d["ticker"] = t; rows.append(d)
+        except Exception:
+            pass
+        rows.append(r)
     return pd.DataFrame(rows)
 
-# ═══ TOOL 3: ML WALK-FORWARD + CLUSTERING ═══
+# === TOOL 3: ML WALK-FORWARD + CLUSTERING ===
 def run_ml(prices):
     feat = prices.copy()
     feat["month"] = feat["data"].dt.to_period("M")
@@ -83,8 +86,7 @@ def run_ml(prices):
     me = me.sort_values(["ticker","data"])
     mkt = ["vol_21","mom_6m","mom_12m","drawdown"]
     for c in mkt:
-        me[f"{c}_z"] = me.groupby("data")[c].transform(
-            lambda s: (s-s.mean())/(s.std() if s.std()>0 else 1))
+        me[f"{c}_z"] = me.groupby("data")[c].transform(lambda s: (s-s.mean())/(s.std() if s.std()>0 else 1))
     mkt_z = [f"{c}_z" for c in mkt]
     me["ret_12m_fwd"] = me.groupby("ticker")["preco"].transform(lambda s: s.shift(-12)/s-1.0)
     core = mkt + mkt_z
@@ -99,9 +101,7 @@ def run_ml(prices):
         m.fit(tr[core].values, tr["ret_12m_fwd"].values)
         yp = m.predict(te[core].values); yt = te["ret_12m_fwd"].values
         sp = spearmanr(yt,yp).correlation if len(set(yt))>1 else np.nan
-        metrics.append({"year":ty,"rmse":np.sqrt(mean_squared_error(yt,yp)),
-                        "mae":mean_absolute_error(yt,yp),"r2":r2_score(yt,yp),
-                        "spearman_ic":sp,"n":len(te)})
+        metrics.append({"year":ty,"rmse":np.sqrt(mean_squared_error(yt,yp)),"mae":mean_absolute_error(yt,yp),"r2":r2_score(yt,yp),"spearman_ic":sp,"n":len(te)})
         fis.append(pd.Series(m.feature_importances_,index=core,name=f"y{ty}"))
     metrics_df = pd.DataFrame(metrics)
     fi_df = pd.concat(fis,axis=1).T if fis else pd.DataFrame()
@@ -132,7 +132,7 @@ def run_ml(prices):
         clust["cluster"]=0; clust["perfil"]="N/A"
     return metrics_df, fi_df, latest, clust
 
-# ═══ TOOL 4: MODELO PREDITIVO DIARIO ═══
+# === TOOL 4: MODELO PREDITIVO ===
 def run_predictive_model(prices):
     results, all_fi = [], []
     for ticker in prices["ticker"].unique():
@@ -161,7 +161,7 @@ def run_predictive_model(prices):
         all_fi.append(pd.Series(m.feature_importances_,index=feats,name=ticker))
     return pd.DataFrame(results), (pd.DataFrame(all_fi) if all_fi else pd.DataFrame())
 
-# ═══ TOOL 5: TRADING SYSTEM ═══
+# === TOOL 5: TRADING SYSTEM ===
 def run_trading_system(prices, mc=20, ml=60):
     all_res, summary = [], []
     for ticker in prices["ticker"].unique():
@@ -182,7 +182,7 @@ def run_trading_system(prices, mc=20, ml=60):
         summary.append({"ticker":ticker,"ret_buyhold":round(rb*100,1),"ret_estrategia":round(rs*100,1),"alpha":round((rs-rb)*100,1)})
     return (pd.concat(all_res,ignore_index=True) if all_res else pd.DataFrame()), pd.DataFrame(summary)
 
-# ═══ TOOL 6: MONTE CARLO ═══
+# === TOOL 6: MONTE CARLO ===
 def run_monte_carlo(prices, n_sim=10000):
     wide = prices.pivot_table(index="data",columns="ticker",values="preco")
     wide = wide.dropna(axis=1,how="all").dropna()
@@ -204,7 +204,7 @@ def run_monte_carlo(prices, n_sim=10000):
     for t in tickers_ok: best_dict[t] = best[f"w_{t}"]
     return df, best_dict, tickers_ok
 
-# ═══ TOOL 7: SCORING COMPOSTO ═══
+# === TOOL 7: SCORING ===
 PERFIS = {
     "conservador": {"mercado":0.60,"qualidade":0.40},
     "moderado":    {"mercado":0.50,"qualidade":0.50},
@@ -214,31 +214,26 @@ PERFIS = {
 def run_scoring(prices, fund_df, perfil="moderado"):
     pesos = PERFIS.get(perfil, PERFIS["moderado"])
     snap = prices.dropna(subset=["vol_21","mom_6m"]).sort_values("data").groupby("ticker").tail(1).copy()
-    # Safe merge
-    fund_cols = [c for c in ["ticker","P_L","P_VP","EV_EBITDA","nome","setor","marketCap","div_yield",
-                             "profitMargins","returnOnEquity","revenueGrowth"] if c in fund_df.columns]
+    fund_cols = [c for c in ["ticker","P_L","P_VP","EV_EBITDA","nome","setor","marketCap","div_yield","profitMargins","returnOnEquity","revenueGrowth"] if c in fund_df.columns]
     snap = snap.merge(fund_df[fund_cols], on="ticker", how="left")
-    # Market score
     snap["sc_mom"] = snap["mom_6m"].rank(pct=True)*100
     snap["sc_vol"] = snap["vol_21"].rank(pct=True,ascending=False)*100
     snap["sc_dd"] = snap["drawdown"].rank(pct=True,ascending=False)*100
     snap["score_mercado"] = snap["sc_mom"]*0.5+snap["sc_vol"]*0.3+snap["sc_dd"]*0.2
-    # Quality score from P/VP
     if "P_VP" in snap.columns and snap["P_VP"].notna().sum()>0:
         snap["score_qual"] = snap["P_VP"].rank(pct=True,ascending=True)*100
     else:
-        snap["score_qual"] = 50
+        snap["score_qual"] = 50.0
     snap["score_qual"] = snap["score_qual"].fillna(50)
     snap["score"] = (snap["score_mercado"]*pesos["mercado"]+snap["score_qual"]*pesos["qualidade"]).round(1)
     def rec(s):
-        if pd.isna(s): return "Hold"
-        if s>=65: return "Buy"
-        if s>=35: return "Hold"
-        return "Sell"
+        if pd.isna(s): return "HOLD"
+        if s>=65: return "BUY"
+        if s>=35: return "HOLD"
+        return "SELL"
     snap["recomendacao"] = snap["score"].apply(rec)
     snap["rank"] = snap["score"].rank(ascending=False,method="min").astype(int)
-    # Ensure display columns
     for col in ["nome","setor","P_L","P_VP","EV_EBITDA","marketCap","div_yield"]:
         if col not in snap.columns:
-            snap[col] = np.nan if col not in ["nome","setor"] else "?"
+            snap[col] = np.nan if col not in ["nome","setor"] else "-"
     return snap.sort_values("rank")
