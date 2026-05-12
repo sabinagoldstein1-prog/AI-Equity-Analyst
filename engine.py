@@ -254,3 +254,127 @@ def run_scoring(prices, fund_df, nlp_df, val_df, ml_preds, perfil="moderado"):
     snap["recomendacao"] = snap["score"].apply(rec)
     snap["rank"] = snap["score"].rank(ascending=False, method="min").astype(int)
     return snap.sort_values("rank")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL 7 — MODELO PREDITIVO: Prever se ação sobe amanhã (Aula FinIA - Seção 1)
+# ═══════════════════════════════════════════════════════════════════════════════
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, roc_auc_score
+
+def run_predictive_model(prices):
+    """
+    Para cada ticker, treina um modelo preditivo que prevê se a ação sobe amanhã.
+    Usa: retorno 1d, 5d, 20d, volatilidade 20d, posição vs média 20d.
+    Split temporal 70/30. Retorna métricas e importância das features.
+    """
+    results = []
+    all_fi = []
+    for ticker in prices["ticker"].unique():
+        sub = prices[prices["ticker"] == ticker][["data", "preco"]].copy()
+        sub = sub.sort_values("data").set_index("data")
+        if len(sub) < 100:
+            continue
+        df = pd.DataFrame()
+        df["preco"] = sub["preco"]
+        df["retorno"] = df["preco"].pct_change()
+        df["retorno_1d"] = df["retorno"].shift(1)
+        df["retorno_5d"] = df["preco"].pct_change(5)
+        df["retorno_20d"] = df["preco"].pct_change(20)
+        df["vol_20d"] = df["retorno"].rolling(20).std()
+        df["media_20"] = df["preco"].rolling(20).mean()
+        df["acima_media20"] = np.where(df["preco"] > df["media_20"], 1, 0)
+        df["target"] = np.where(df["retorno"].shift(-1) > 0, 1, 0)
+        df = df.dropna()
+        if len(df) < 50:
+            continue
+        feats = ["retorno_1d", "retorno_5d", "retorno_20d", "vol_20d", "acima_media20"]
+        X = df[feats]
+        y = df["target"]
+        split = int(len(df) * 0.7)
+        X_tr, X_te = X.iloc[:split], X.iloc[split:]
+        y_tr, y_te = y.iloc[:split], y.iloc[split:]
+        m = RandomForestClassifier(n_estimators=300, max_depth=4, random_state=42, n_jobs=-1)
+        m.fit(X_tr, y_tr)
+        y_pred = m.predict(X_te)
+        y_prob = m.predict_proba(X_te)[:, 1]
+        acc = accuracy_score(y_te, y_pred)
+        auc = roc_auc_score(y_te, y_prob) if len(set(y_te)) > 1 else np.nan
+        results.append({"ticker": ticker, "accuracy": round(acc, 4), "auc": round(auc, 4), "n_test": len(y_te)})
+        all_fi.append(pd.Series(m.feature_importances_, index=feats, name=ticker))
+    metrics = pd.DataFrame(results)
+    fi = pd.DataFrame(all_fi) if all_fi else pd.DataFrame()
+    return metrics, fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL 8 — TRADING SYSTEM: Médias Móveis (Aula FinIA - Seção 2)
+# ═══════════════════════════════════════════════════════════════════════════════
+def run_trading_system(prices, media_curta=20, media_longa=60):
+    """
+    Estratégia de cruzamento de médias móveis para cada ticker.
+    Retorna DataFrame com retorno acumulado da estratégia vs buy-and-hold.
+    """
+    all_results = []
+    for ticker in prices["ticker"].unique():
+        sub = prices[prices["ticker"] == ticker][["data", "preco"]].copy().sort_values("data")
+        if len(sub) < media_longa + 10:
+            continue
+        df = pd.DataFrame()
+        df["data"] = sub["data"].values
+        df["preco"] = sub["preco"].values
+        df["ma_curta"] = df["preco"].rolling(media_curta).mean()
+        df["ma_longa"] = df["preco"].rolling(media_longa).mean()
+        df["sinal"] = np.where(df["ma_curta"] > df["ma_longa"], 1, 0)
+        df["ret_acao"] = df["preco"].pct_change()
+        df["ret_estrategia"] = df["sinal"].shift(1) * df["ret_acao"]
+        df = df.dropna()
+        df["acum_acao"] = (1 + df["ret_acao"]).cumprod()
+        df["acum_estrategia"] = (1 + df["ret_estrategia"]).cumprod()
+        df["ticker"] = ticker
+        all_results.append(df)
+    if not all_results:
+        return pd.DataFrame()
+    combined = pd.concat(all_results, ignore_index=True)
+    # Resumo final por ticker
+    summary = []
+    for ticker in combined["ticker"].unique():
+        sub = combined[combined["ticker"] == ticker]
+        ret_bh = sub["acum_acao"].iloc[-1] - 1
+        ret_st = sub["acum_estrategia"].iloc[-1] - 1
+        summary.append({"ticker": ticker, "ret_buyhold": round(ret_bh * 100, 1),
+                        "ret_estrategia": round(ret_st * 100, 1),
+                        "alpha": round((ret_st - ret_bh) * 100, 1)})
+    return combined, pd.DataFrame(summary)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL 9 — MONTE CARLO: Otimização de Portfólio (Aula FinIA - Seção 4)
+# ═══════════════════════════════════════════════════════════════════════════════
+def run_monte_carlo(prices, n_sim=10000):
+    """
+    Simula n_sim carteiras com pesos aleatórios.
+    Retorna: (df_carteiras, melhor_carteira, tickers_usados)
+    """
+    # Monta tabela de retornos diários (wide)
+    wide = prices.pivot_table(index="data", columns="ticker", values="preco")
+    wide = wide.dropna(axis=1, how="all").dropna()
+    tickers_ok = wide.columns.tolist()
+    if len(tickers_ok) < 2:
+        return pd.DataFrame(), {}, tickers_ok
+    rets = wide.pct_change().dropna()
+    media = rets.mean()
+    cov = rets.cov()
+    results = []
+    for _ in range(n_sim):
+        w = np.random.random(len(tickers_ok))
+        w = w / w.sum()
+        ret_anual = np.dot(w, media) * 252
+        risk_anual = np.sqrt(np.dot(w.T, np.dot(cov * 252, w)))
+        sharpe = ret_anual / risk_anual if risk_anual > 0 else 0
+        results.append(list(w) + [ret_anual, risk_anual, sharpe])
+    cols = [f"w_{t}" for t in tickers_ok] + ["retorno", "risco", "sharpe"]
+    df = pd.DataFrame(results, columns=cols)
+    best = df.loc[df["sharpe"].idxmax()]
+    # Formata melhor carteira
+    best_dict = {"sharpe": best["sharpe"], "retorno": best["retorno"], "risco": best["risco"]}
+    for t in tickers_ok:
+        best_dict[t] = best[f"w_{t}"]
+    return df, best_dict, tickers_ok
