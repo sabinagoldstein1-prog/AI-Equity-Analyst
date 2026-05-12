@@ -378,3 +378,4 @@ def run_monte_carlo(prices, n_sim=10000):
     for t in tickers_ok:
         best_dict[t] = best[f"w_{t}"]
     return df, best_dict, tickers_ok
+    
