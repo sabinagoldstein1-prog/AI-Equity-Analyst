@@ -7,7 +7,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from engine import (fetch_prices, fetch_fundamentals, run_nlp,
-                    run_valuation, run_ml, run_scoring, PERFIS, safe_div)
+                    run_valuation, run_ml, run_scoring, PERFIS, safe_div,
+                    run_predictive_model, run_trading_system, run_monte_carlo)
 from ai_analyst import generate_company_analysis, generate_executive_summary
 
 st.set_page_config(page_title="AI Equity Analyst", page_icon="\U0001f916", layout="wide", initial_sidebar_state="expanded")
@@ -33,7 +34,7 @@ def parse_tickers(raw):
     tickers = [t.strip().upper() for t in raw.replace(",", " ").replace("\n", " ").split() if t.strip()]
     return [t if t.endswith(".SA") else t + ".SA" for t in tickers]
 
-for key in ["result","prices","fund","nlp_data","val_df","sens_df","ml_metrics","ml_fi","ml_preds","ml_clusters"]:
+for key in ["result","prices","fund","nlp_data","val_df","sens_df","ml_metrics","ml_fi","ml_preds","ml_clusters","pred_metrics","pred_fi","trading_curves","trading_summary","mc_carteiras","mc_best","mc_tickers"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -58,6 +59,17 @@ if run_btn:
         st.session_state.ml_metrics, st.session_state.ml_fi, st.session_state.ml_preds, st.session_state.ml_clusters = ml
         progress.progress(90, "Score composto...")
         st.session_state.result = run_scoring(st.session_state.prices, st.session_state.fund, st.session_state.nlp_data, st.session_state.val_df, st.session_state.ml_preds, perfil)
+        progress.progress(93, "Modelo preditivo...")
+        st.session_state.pred_metrics, st.session_state.pred_fi = run_predictive_model(st.session_state.prices)
+        progress.progress(96, "Trading system...")
+        tc, ts = run_trading_system(st.session_state.prices)
+        st.session_state.trading_curves = tc
+        st.session_state.trading_summary = ts
+        progress.progress(98, "Monte Carlo portfolio...")
+        mc, best, mct = run_monte_carlo(st.session_state.prices)
+        st.session_state.mc_carteiras = mc
+        st.session_state.mc_best = best
+        st.session_state.mc_tickers = mct
         progress.progress(100, "Completo!")
     except Exception as e:
         st.error(f"Erro: {e}")
@@ -76,7 +88,7 @@ nlp_df = st.session_state.nlp_data
 val_df = st.session_state.val_df
 sens = st.session_state.sens_df
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["\U0001f3c6 Ranking","\U0001f4ca Dashboard","\U0001f4dd NLP","\U0001f4b0 Valuation","\U0001f916 ML","\U0001f4cb Dossie IA"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(["\U0001f3c6 Ranking","\U0001f4ca Dashboard","\U0001f4dd NLP","\U0001f4b0 Valuation","\U0001f916 ML","\U0001f3af Preditivo","\U0001f4c8 Trading","\U0001f3b2 Portfolio","\U0001f4cb Dossie IA"])
 
 with tab1:
     st.header("Ranking Final")
@@ -199,6 +211,103 @@ with tab5:
         st.plotly_chart(fig, use_container_width=True)
 
 with tab6:
+    st.header("Modelo Preditivo - Previsao Diaria")
+    st.caption("Random Forest para prever se a acao sobe amanha. Split temporal 70/30. Aula FinIA Secao 1.")
+    pm = st.session_state.pred_metrics
+    pfi = st.session_state.pred_fi
+    if pm is not None and not pm.empty:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Metricas por Ticker")
+            pm_display = pm.copy()
+            pm_display["ticker"] = pm_display["ticker"].str.replace(".SA","")
+            st.dataframe(pm_display, use_container_width=True, hide_index=True)
+            fig = px.bar(pm_display, x="ticker", y="auc", title="AUC por Ticker",
+                         color="auc", color_continuous_scale="RdYlGn", color_continuous_midpoint=0.5)
+            fig.add_hline(y=0.5, line_dash="dash", line_color="red", opacity=0.5, annotation_text="Random (0.5)")
+            fig.update_layout(template="plotly_dark", paper_bgcolor="#0F172A", plot_bgcolor="#1E293B")
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            if pfi is not None and not pfi.empty:
+                st.subheader("Feature Importance (media)")
+                fi_mean = pfi.mean().sort_values(ascending=True)
+                fig = go.Figure(go.Bar(y=fi_mean.index, x=fi_mean.values, orientation="h", marker_color="#3B82F6"))
+                fig.update_layout(title="Importancia das Features", template="plotly_dark",
+                                  paper_bgcolor="#0F172A", plot_bgcolor="#1E293B")
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Dados insuficientes para modelo preditivo.")
+
+with tab7:
+    st.header("Trading System - Medias Moveis")
+    st.caption("Estrategia de cruzamento de medias moveis (curta 20d / longa 60d). Aula FinIA Secao 2.")
+    tc = st.session_state.trading_curves
+    ts = st.session_state.trading_summary
+    if ts is not None and not ts.empty:
+        st.subheader("Resumo: Estrategia vs Buy-and-Hold")
+        ts_display = ts.copy()
+        ts_display["ticker"] = ts_display["ticker"].str.replace(".SA","")
+        st.dataframe(ts_display, use_container_width=True, hide_index=True,
+                     column_config={"ret_buyhold": st.column_config.NumberColumn("Buy&Hold (%)", format="%.1f%%"),
+                                    "ret_estrategia": st.column_config.NumberColumn("Estrategia (%)", format="%.1f%%"),
+                                    "alpha": st.column_config.NumberColumn("Alpha (%)", format="%+.1f%%")})
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="Buy & Hold", x=ts_display["ticker"], y=ts_display["ret_buyhold"], marker_color="#3B82F6"))
+        fig.add_trace(go.Bar(name="Estrategia MM", x=ts_display["ticker"], y=ts_display["ret_estrategia"], marker_color="#22C55E"))
+        fig.update_layout(barmode="group", title="Retorno Acumulado: Estrategia vs Buy & Hold (%)",
+                          template="plotly_dark", paper_bgcolor="#0F172A", plot_bgcolor="#1E293B")
+        st.plotly_chart(fig, use_container_width=True)
+        if tc is not None and not tc.empty:
+            sel = st.selectbox("Selecione ticker para ver curva:", ts_display["ticker"].tolist(), key="trading_sel")
+            sel_sa = sel + ".SA" if not sel.endswith(".SA") else sel
+            sub = tc[tc["ticker"] == sel_sa]
+            if not sub.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=sub["data"], y=sub["acum_acao"], name="Buy & Hold", line=dict(color="#3B82F6")))
+                fig.add_trace(go.Scatter(x=sub["data"], y=sub["acum_estrategia"], name="Estrategia MM", line=dict(color="#22C55E")))
+                fig.update_layout(title=f"Evolucao: {sel}", yaxis_title="Retorno Acumulado",
+                                  template="plotly_dark", paper_bgcolor="#0F172A", plot_bgcolor="#1E293B")
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Dados insuficientes para trading system.")
+
+with tab8:
+    st.header("Otimizacao de Portfolio - Monte Carlo")
+    st.caption("Simulacao de 10.000 carteiras aleatorias para encontrar a fronteira eficiente. Aula FinIA Secao 4.")
+    mc = st.session_state.mc_carteiras
+    best = st.session_state.mc_best
+    mct = st.session_state.mc_tickers
+    if mc is not None and not mc.empty and best:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            fig = px.scatter(mc, x="risco", y="retorno", color="sharpe", color_continuous_scale="viridis",
+                             labels={"risco":"Risco Anualizado","retorno":"Retorno Anualizado","sharpe":"Sharpe"},
+                             title="Fronteira Eficiente - 10.000 Carteiras Simuladas")
+            fig.add_trace(go.Scatter(x=[best["risco"]], y=[best["retorno"]], mode="markers",
+                                     marker=dict(size=15, color="red", symbol="star"), name="Melhor Sharpe"))
+            fig.update_layout(template="plotly_dark", paper_bgcolor="#0F172A", plot_bgcolor="#1E293B")
+            st.plotly_chart(fig, use_container_width=True)
+        with col2:
+            st.subheader("Melhor Carteira")
+            st.metric("Sharpe", f"{best['sharpe']:.2f}")
+            st.metric("Retorno Anual", f"{best['retorno']*100:.1f}%")
+            st.metric("Risco Anual", f"{best['risco']*100:.1f}%")
+            st.divider()
+            st.subheader("Alocacao Otima")
+            for t in mct:
+                w = best.get(t, 0)
+                st.markdown(f"**{t.replace('.SA','')}**: {w*100:.1f}%")
+            # Pie chart
+            labels = [t.replace(".SA","") for t in mct]
+            values = [best.get(t, 0)*100 for t in mct]
+            fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.4))
+            fig.update_layout(title="Alocacao (%)", template="plotly_dark", paper_bgcolor="#0F172A",
+                              height=300, margin=dict(t=40,b=0,l=0,r=0))
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Dados insuficientes para Monte Carlo (precisa de 2+ tickers com dados).")
+
+with tab9:
     st.header("Dossie - IA Generativa")
     has_key = bool(st.secrets.get("GEMINI_API_KEY", ""))
     if not has_key:
