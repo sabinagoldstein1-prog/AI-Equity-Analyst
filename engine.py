@@ -67,7 +67,11 @@ def fetch_fundamentals(tickers):
                          "EV": ev, "lucro": lucro, "pl_equity": pl_eq,
                          "totalDebt": debt, "summary": summary, "div_yield": dy})
         except:
-            rows.append({"ticker": t, "nome": t, "setor": "?"})
+            rows.append({"ticker": t, "nome": t, "setor": "?",
+                         "preco": np.nan, "marketCap": np.nan, "shares": np.nan,
+                         "P_L": np.nan, "P_VP": np.nan, "EV_EBITDA": np.nan,
+                         "EV": np.nan, "lucro": np.nan, "pl_equity": np.nan,
+                         "totalDebt": np.nan, "summary": "", "div_yield": np.nan})
     return pd.DataFrame(rows)
 
 # ═══════════════════════════════════════════════════════════════════════════════
