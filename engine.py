@@ -1,7 +1,7 @@
 """
-engine.py — Motor do Agente de IA (v3)
+engine.py v4 — Fixed Yahoo Finance data fetching for Streamlit Cloud
 """
-import warnings, numpy as np, pandas as pd, yfinance as yf
+import warnings, time, numpy as np, pandas as pd, yfinance as yf
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -17,6 +17,18 @@ def safe_div(a, b):
         if np.isnan(a) or np.isnan(b) or b == 0: return np.nan
         return a / b
     except: return np.nan
+
+def _safe_float(val):
+    """Convert any value to float, returning NaN on failure."""
+    if val is None: return np.nan
+    try:
+        v = float(val)
+        return v if not np.isnan(v) and not np.isinf(v) else np.nan
+    except: return np.nan
+
+def _safe_str(val, default="-"):
+    if val is None or val == "" or val == "?" or str(val).strip() == "": return default
+    return str(val).strip()
 
 # === TOOL 1: PRECOS ===
 def fetch_prices(tickers, start="2021-01-01"):
@@ -34,51 +46,86 @@ def fetch_prices(tickers, start="2021-01-01"):
     p["drawdown"] = g["preco"].transform(lambda x: (x - x.cummax()) / x.cummax())
     return p
 
-# === TOOL 2: FUNDAMENTOS ===
+# === TOOL 2: FUNDAMENTOS (ROBUST) ===
 def fetch_fundamentals(tickers):
-    """Busca fundamentos do Yahoo Finance. Nunca retorna ? ou None nas colunas principais."""
+    """
+    Fetches fundamentals using TWO methods to avoid empty data:
+    1. yf.Ticker().info (primary)
+    2. yf.Ticker().fast_info + basic_info (fallback)
+    Adds 0.3s delay between tickers to avoid rate limiting.
+    """
     rows = []
-    for t in tickers:
+    for i, t in enumerate(tickers):
         r = {"ticker": t, "nome": t.replace(".SA",""), "setor": "-",
              "preco": np.nan, "marketCap": np.nan, "shares": np.nan,
              "P_L": np.nan, "P_VP": np.nan, "EV_EBITDA": np.nan,
              "EV": np.nan, "lucro": np.nan, "pl_equity": np.nan,
-             "totalDebt": np.nan, "summary": "", "div_yield": np.nan,
+             "totalDebt": np.nan, "div_yield": np.nan,
              "profitMargins": np.nan, "returnOnEquity": np.nan,
              "revenueGrowth": np.nan, "ebitdaMargins": np.nan,
              "debtToEquity": np.nan}
         try:
-            info = yf.Ticker(t).info
-            if not info or not isinstance(info, dict):
-                rows.append(r)
-                continue
-            r["nome"] = str(info.get("shortName") or info.get("longName") or t.replace(".SA",""))
-            r["setor"] = str(info.get("sector") or info.get("industry") or "-")
-            r["preco"] = float(info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose") or np.nan)
-            r["marketCap"] = float(info.get("marketCap") or np.nan)
-            r["shares"] = float(info.get("sharesOutstanding") or info.get("floatShares") or np.nan)
-            r["P_L"] = float(info.get("trailingPE") or info.get("forwardPE") or np.nan)
-            r["P_VP"] = float(info.get("priceToBook") or np.nan)
-            r["EV_EBITDA"] = float(info.get("enterpriseToEbitda") or np.nan)
-            r["EV"] = float(info.get("enterpriseValue") or np.nan)
-            r["totalDebt"] = float(info.get("totalDebt") or np.nan)
-            r["div_yield"] = float(info.get("dividendYield") or np.nan)
-            r["profitMargins"] = float(info.get("profitMargins") or np.nan)
-            r["returnOnEquity"] = float(info.get("returnOnEquity") or np.nan)
-            r["revenueGrowth"] = float(info.get("revenueGrowth") or np.nan)
-            r["ebitdaMargins"] = float(info.get("ebitdaMargins") or np.nan)
-            r["debtToEquity"] = float(info.get("debtToEquity") or np.nan)
-            r["summary"] = str(info.get("longBusinessSummary") or "").lower()
+            tk = yf.Ticker(t)
+            # Method 1: .info
+            info = {}
+            try:
+                info = tk.info or {}
+            except: pass
+            # Method 2: fast_info as fallback for price/mcap
+            fi = {}
+            try:
+                fi = {k: getattr(tk.fast_info, k, None) for k in
+                      ["market_cap","shares","last_price","previous_close"]}
+            except: pass
+
+            # Name and sector
+            r["nome"] = _safe_str(info.get("shortName") or info.get("longName"), t.replace(".SA",""))
+            r["setor"] = _safe_str(info.get("sector") or info.get("industry"), "-")
+
+            # Price: try info first, then fast_info
+            r["preco"] = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")
+                                     or info.get("previousClose") or fi.get("last_price")
+                                     or fi.get("previous_close"))
+
+            # Market cap
+            r["marketCap"] = _safe_float(info.get("marketCap") or fi.get("market_cap"))
+            r["shares"] = _safe_float(info.get("sharesOutstanding") or info.get("floatShares") or fi.get("shares"))
+
+            # Multiples
+            r["P_L"] = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
+            r["P_VP"] = _safe_float(info.get("priceToBook"))
+            r["EV_EBITDA"] = _safe_float(info.get("enterpriseToEbitda"))
+            r["EV"] = _safe_float(info.get("enterpriseValue"))
+            r["totalDebt"] = _safe_float(info.get("totalDebt"))
+            r["div_yield"] = _safe_float(info.get("dividendYield"))
+            r["profitMargins"] = _safe_float(info.get("profitMargins"))
+            r["returnOnEquity"] = _safe_float(info.get("returnOnEquity"))
+            r["revenueGrowth"] = _safe_float(info.get("revenueGrowth"))
+            r["ebitdaMargins"] = _safe_float(info.get("ebitdaMargins"))
+            r["debtToEquity"] = _safe_float(info.get("debtToEquity"))
+
+            # Derived
             r["lucro"] = safe_div(r["marketCap"], r["P_L"])
             r["pl_equity"] = safe_div(r["marketCap"], r["P_VP"])
             if pd.isna(r["EV_EBITDA"]) and pd.notna(r["EV"]) and pd.notna(r["lucro"]) and r["lucro"] > 0:
                 r["EV_EBITDA"] = safe_div(r["EV"], r["lucro"])
+
+            # If still no price, get from last downloaded price
+            if pd.isna(r["preco"]):
+                try:
+                    hist = tk.history(period="5d")
+                    if not hist.empty:
+                        r["preco"] = float(hist["Close"].iloc[-1])
+                except: pass
+
         except Exception:
             pass
         rows.append(r)
+        if i < len(tickers) - 1:
+            time.sleep(0.3)  # rate limit protection
     return pd.DataFrame(rows)
 
-# === TOOL 3: ML WALK-FORWARD + CLUSTERING ===
+# === TOOL 3: ML ===
 def run_ml(prices):
     feat = prices.copy()
     feat["month"] = feat["data"].dt.to_period("M")
@@ -123,8 +170,7 @@ def run_ml(prices):
         names = {}; used = set()
         q = centers["vol_21"].idxmin(); names[q]="Defensivo"; used.add(q)
         remaining = [i for i in centers.index if i not in used]
-        if remaining:
-            g2 = centers.loc[remaining,"mom_6m"].idxmax(); names[g2]="Crescimento"; used.add(g2)
+        if remaining: g2 = centers.loc[remaining,"mom_6m"].idxmax(); names[g2]="Crescimento"; used.add(g2)
         for i in centers.index:
             if i not in used: names[i]="Risco"
         clust["perfil"] = clust["cluster"].map(names)
@@ -132,7 +178,7 @@ def run_ml(prices):
         clust["cluster"]=0; clust["perfil"]="N/A"
     return metrics_df, fi_df, latest, clust
 
-# === TOOL 4: MODELO PREDITIVO ===
+# === TOOL 4: PREDITIVO ===
 def run_predictive_model(prices):
     results, all_fi = [], []
     for ticker in prices["ticker"].unique():
@@ -161,7 +207,7 @@ def run_predictive_model(prices):
         all_fi.append(pd.Series(m.feature_importances_,index=feats,name=ticker))
     return pd.DataFrame(results), (pd.DataFrame(all_fi) if all_fi else pd.DataFrame())
 
-# === TOOL 5: TRADING SYSTEM ===
+# === TOOL 5: TRADING ===
 def run_trading_system(prices, mc=20, ml=60):
     all_res, summary = [], []
     for ticker in prices["ticker"].unique():
@@ -236,4 +282,8 @@ def run_scoring(prices, fund_df, perfil="moderado"):
     for col in ["nome","setor","P_L","P_VP","EV_EBITDA","marketCap","div_yield"]:
         if col not in snap.columns:
             snap[col] = np.nan if col not in ["nome","setor"] else "-"
+    # Replace ? with -
+    for col in ["nome","setor"]:
+        if col in snap.columns:
+            snap[col] = snap[col].replace("?","-").replace("","-").fillna("-")
     return snap.sort_values("rank")
