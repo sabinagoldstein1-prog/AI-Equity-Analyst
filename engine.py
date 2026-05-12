@@ -228,18 +228,35 @@ PERFIS = {
 def run_scoring(prices, fund_df, nlp_df, val_df, ml_preds, perfil="moderado"):
     pesos = PERFIS.get(perfil, PERFIS["moderado"])
     snap = prices.dropna(subset=["vol_21","mom_6m"]).sort_values("data").groupby("ticker").tail(1).copy()
-    snap = snap.merge(fund_df[["ticker","P_L","P_VP","EV_EBITDA","nome","setor","marketCap","div_yield"]], on="ticker", how="left")
-    snap = snap.merge(nlp_df[["ticker","indice_textual","sent_label","sent_score"]], on="ticker", how="left")
-    snap = snap.merge(val_df[["ticker","val_score","impl_price","gap_pct"]], on="ticker", how="left")
+    # Safe merges: only use columns that exist in source DataFrames
+    fund_cols = [c for c in ["ticker","P_L","P_VP","EV_EBITDA","nome","setor","marketCap","div_yield"] if c in fund_df.columns]
+    snap = snap.merge(fund_df[fund_cols], on="ticker", how="left")
+    nlp_cols = [c for c in ["ticker","indice_textual","sent_label","sent_score"] if c in nlp_df.columns]
+    snap = snap.merge(nlp_df[nlp_cols], on="ticker", how="left")
+    val_cols = [c for c in ["ticker","val_score","impl_price","gap_pct"] if c in val_df.columns]
+    snap = snap.merge(val_df[val_cols], on="ticker", how="left")
     if ml_preds is not None and not ml_preds.empty:
-        snap = snap.merge(ml_preds[["ticker","pred_ret_12m","rank_pred"]], on="ticker", how="left")
-    snap["indice_textual"] = snap["indice_textual"].fillna(50)
-    snap["val_score"] = snap["val_score"].fillna(50)
+        ml_cols = [c for c in ["ticker","pred_ret_12m","rank_pred"] if c in ml_preds.columns]
+        snap = snap.merge(ml_preds[ml_cols], on="ticker", how="left")
+    # Fill NaN with neutral values
+    for col in ["indice_textual","val_score"]:
+        if col in snap.columns:
+            snap[col] = snap[col].fillna(50)
+        else:
+            snap[col] = 50
+    # Ensure P_VP exists for quality score
+    if "P_VP" not in snap.columns:
+        snap["P_VP"] = np.nan
     snap["sc_mom"] = snap["mom_6m"].rank(pct=True)*100
     snap["sc_vol"] = snap["vol_21"].rank(pct=True, ascending=False)*100
     snap["sc_dd"]  = snap["drawdown"].rank(pct=True, ascending=False)*100
     snap["score_mercado"] = snap["sc_mom"]*0.5+snap["sc_vol"]*0.3+snap["sc_dd"]*0.2
-    snap["score_qual"] = snap["P_VP"].rank(pct=True, ascending=True)*100
+    # Quality score: if P_VP is all NaN, use neutral 50
+    if snap["P_VP"].notna().sum() > 0:
+        snap["score_qual"] = snap["P_VP"].rank(pct=True, ascending=True)*100
+    else:
+        snap["score_qual"] = 50
+    snap["score_qual"] = snap["score_qual"].fillna(50)
     snap["score"] = (
         snap["score_mercado"]*pesos["mercado"]+
         snap["val_score"]*pesos["valuation"]+
@@ -253,6 +270,10 @@ def run_scoring(prices, fund_df, nlp_df, val_df, ml_preds, perfil="moderado"):
         return "🔴 Sell"
     snap["recomendacao"] = snap["score"].apply(rec)
     snap["rank"] = snap["score"].rank(ascending=False, method="min").astype(int)
+    # Ensure all display columns exist
+    for col in ["nome","setor","P_L","P_VP","EV_EBITDA","marketCap","gap_pct","sent_label","impl_price"]:
+        if col not in snap.columns:
+            snap[col] = np.nan if col != "nome" and col != "setor" and col != "sent_label" else "?"
     return snap.sort_values("rank")
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -378,4 +399,3 @@ def run_monte_carlo(prices, n_sim=10000):
     for t in tickers_ok:
         best_dict[t] = best[f"w_{t}"]
     return df, best_dict, tickers_ok
-    
