@@ -83,48 +83,15 @@ def fetch_prices(tickers, start="2021-01-01"):
 # TOOL 2: FUNDAMENTALS (Robust 3-layer fetching)
 # ============================================================
 
-# Hardcoded sector map for Brazilian tickers (when YF returns empty)
-SECTOR_MAP = {
-    "PETR4.SA": "Energy", "PRIO3.SA": "Energy", "PETR3.SA": "Energy",
-    "VALE3.SA": "Basic Materials", "SUZB3.SA": "Basic Materials",
-    "KLBN11.SA": "Basic Materials", "CSNA3.SA": "Basic Materials",
-    "USIM5.SA": "Basic Materials", "GGBR4.SA": "Basic Materials",
-    "ITUB4.SA": "Financial Services", "BBDC4.SA": "Financial Services",
-    "SANB11.SA": "Financial Services", "BBAS3.SA": "Financial Services",
-    "BPAC11.SA": "Financial Services", "ABCB4.SA": "Financial Services",
-    "B3SA3.SA": "Financial Services", "ITSA4.SA": "Financial Services",
-    "EGIE3.SA": "Utilities", "CMIG4.SA": "Utilities",
-    "EQTL3.SA": "Utilities", "ELET3.SA": "Utilities",
-    "ELET6.SA": "Utilities", "SBSP3.SA": "Utilities",
-    "TAEE11.SA": "Utilities", "CPFE3.SA": "Utilities",
-    "ABEV3.SA": "Consumer Defensive", "JBSS3.SA": "Consumer Defensive",
-    "MRFG3.SA": "Consumer Defensive", "BRFS3.SA": "Consumer Defensive",
-    "NTCO3.SA": "Consumer Defensive",
-    "WEGE3.SA": "Industrials", "EMBR3.SA": "Industrials",
-    "RAIL3.SA": "Industrials", "AZUL4.SA": "Industrials",
-    "GOLL4.SA": "Industrials", "CCRO3.SA": "Industrials",
-    "MGLU3.SA": "Consumer Cyclical", "LREN3.SA": "Consumer Cyclical",
-    "RENT3.SA": "Consumer Cyclical", "VIIA3.SA": "Consumer Cyclical",
-    "AMER3.SA": "Consumer Cyclical",
-    "RDOR3.SA": "Healthcare", "HAPV3.SA": "Healthcare",
-    "QUAL3.SA": "Healthcare", "FLRY3.SA": "Healthcare",
-    "VIVT3.SA": "Communication Services", "TIMS3.SA": "Communication Services",
-}
-
-NAME_MAP = {
-    "PETR4.SA": "Petrobras PN", "PETR3.SA": "Petrobras ON",
-    "PRIO3.SA": "PRIO", "VALE3.SA": "Vale",
-    "ITUB4.SA": "Itau Unibanco", "BBDC4.SA": "Bradesco",
-    "SANB11.SA": "Santander BR", "BBAS3.SA": "Banco do Brasil",
-    "BPAC11.SA": "BTG Pactual", "ABCB4.SA": "Banco ABC",
-    "EGIE3.SA": "Engie Brasil", "CMIG4.SA": "Cemig",
-    "EQTL3.SA": "Equatorial", "WEGE3.SA": "WEG",
-    "ABEV3.SA": "Ambev", "SUZB3.SA": "Suzano",
-    "B3SA3.SA": "B3", "ITSA4.SA": "Itausa",
-    "RENT3.SA": "Localiza", "RDOR3.SA": "Rede DOr",
-    "JBSS3.SA": "JBS", "ELET3.SA": "Eletrobras",
-    "RAIL3.SA": "Rumo", "EMBR3.SA": "Embraer",
-}
+# Sector/Name maps from b3_universe (single source of truth)
+try:
+    from b3_universe import B3_UNIVERSE
+    SECTOR_MAP = {t: s for t, (_, s) in B3_UNIVERSE.items()}
+    NAME_MAP = {t: n for t, (n, _) in B3_UNIVERSE.items()}
+except ImportError:
+    # Fallback if b3_universe not available
+    SECTOR_MAP = {}
+    NAME_MAP = {}
 
 
 def _empty_row(ticker):
