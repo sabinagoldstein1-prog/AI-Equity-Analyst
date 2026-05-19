@@ -13,6 +13,10 @@ from engine import (
     run_predictive_model, run_trading_system,
     run_monte_carlo, run_scoring, PROFILES,
 )
+from b3_universe import (
+    B3_UNIVERSE, PORTFOLIOS, get_all_sectors,
+    get_tickers_by_sector, get_ticker_label, get_universe_df,
+)
 
 # ============================================================
 # PAGE CONFIG
@@ -346,17 +350,54 @@ def edu_box(html_content):
 with st.sidebar:
     st.markdown("# 💹 AI EQUITY ANALYST")
     st.caption("QUANT RESEARCH TERMINAL")
-    st.caption(f"v5.0 | FGV 2026")
+    st.caption(f"v5.1 | FGV 2026")
     st.markdown("---")
 
-    st.markdown("##### 📊 UNIVERSE")
-    tickers_input = st.text_area(
-        "Tickers (one per line)",
-        value="PETR4\nITUB4\nBBDC4\nBBAS3\nVALE3\nWEGE3\nABEV3\nPRIO3\nEGIE3\nEQTL3",
-        height=180,
+    # ===== SELECTION MODE =====
+    st.markdown("##### 📊 STOCK SELECTION")
+    selection_mode = st.radio(
+        "Mode",
+        ["📋 Preset Portfolio", "🏭 By Sector", "🎯 Custom Selection"],
         label_visibility="collapsed",
     )
 
+    selected_tickers = []
+
+    if selection_mode == "📋 Preset Portfolio":
+        portfolio_name = st.selectbox(
+            "Portfolio",
+            list(PORTFOLIOS.keys()),
+            index=0,
+        )
+        selected_tickers = PORTFOLIOS[portfolio_name]
+        st.caption(f"**{len(selected_tickers)} stocks** in {portfolio_name}")
+
+    elif selection_mode == "🏭 By Sector":
+        sectors = get_all_sectors()
+        selected_sectors = st.multiselect(
+            "Select sectors",
+            sectors,
+            default=["Financial Services", "Energy"],
+        )
+        for sec in selected_sectors:
+            selected_tickers.extend(get_tickers_by_sector(sec))
+        st.caption(f"**{len(selected_tickers)} stocks** across {len(selected_sectors)} sectors")
+
+    else:  # Custom Selection
+        all_tickers = sorted(B3_UNIVERSE.keys())
+        selected_tickers = st.multiselect(
+            "Select tickers",
+            all_tickers,
+            default=[
+                "PETR4.SA", "VALE3.SA", "ITUB4.SA", "BBDC4.SA",
+                "ABEV3.SA", "WEGE3.SA", "BBAS3.SA", "B3SA3.SA",
+            ],
+            format_func=lambda t: f"{t.replace('.SA','')} • {B3_UNIVERSE.get(t,('','?'))[1][:12]}",
+        )
+        st.caption(f"**{len(selected_tickers)} stocks** selected manually")
+
+    # ===== STRATEGY =====
+    st.markdown("---")
     st.markdown("##### 🎯 STRATEGY")
     profile = st.selectbox(
         "Profile",
@@ -365,6 +406,7 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
+    # ===== LOOKBACK =====
     st.markdown("##### 📅 LOOKBACK")
     data_inicio = st.date_input(
         "Start",
@@ -372,6 +414,7 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
+    # ===== WEIGHTS DISPLAY =====
     st.markdown("---")
     p = PROFILES[profile]
     st.code(
@@ -385,9 +428,17 @@ with st.sidebar:
     st.markdown("")
     run_btn = st.button("▶ RUN ANALYSIS", type="primary", use_container_width=True)
 
+    # ===== UNIVERSE INFO =====
     st.markdown("---")
-    st.caption("**Engine:** RF Walk-Forward, Monte Carlo 10K, Scoring Multi-Factor")
-    st.caption("**Data:** Yahoo Finance | B3")
+    with st.expander("📚 B3 UNIVERSE DATABASE"):
+        st.caption(f"**{len(B3_UNIVERSE)} stocks** across **{len(get_all_sectors())} sectors**")
+        st.caption("Data: Yahoo Finance")
+        if st.checkbox("Show full universe"):
+            st.dataframe(get_universe_df(), use_container_width=True, hide_index=True, height=250)
+
+    st.markdown("---")
+    st.caption("**Engine:** RF Walk-Forward + Multi-Factor")
+    st.caption("**Monte Carlo:** 10,000 simulations")
 
 # ============================================================
 # STATE
@@ -407,14 +458,10 @@ for k in state_keys:
 # RUN ANALYSIS
 # ============================================================
 
-def parse_tickers(raw):
-    t = [x.strip().upper() for x in raw.replace(",", " ").replace("\n", " ").split() if x.strip()]
-    return [x if x.endswith(".SA") else x + ".SA" for x in t]
-
 if run_btn:
-    tickers = parse_tickers(tickers_input)
+    tickers = selected_tickers
     if len(tickers) < 2:
-        st.error("⚠ Minimum 2 tickers required")
+        st.error("⚠ Minimum 2 tickers required — select more stocks in the sidebar")
         st.stop()
 
     progress = st.progress(0, "▸ INITIALIZING QUANT ENGINE...")
@@ -491,19 +538,43 @@ if st.session_state.result is None:
 
     st.markdown("---")
     st.markdown("##### 🚀 GETTING STARTED")
-    st.markdown("""
-    1. **Input universe** in the sidebar (one ticker per line, B3 format)
-    2. **Select strategy profile**: Conservative / Moderate / Aggressive
-    3. **Click ▶ RUN ANALYSIS** to execute the full pipeline
-    """)
+
+    cgs1, cgs2, cgs3 = st.columns(3)
+    with cgs1:
+        st.markdown("""
+        **1️⃣ SELECT STOCKS**
+
+        Choose from 3 modes:
+        - **Preset Portfolio** (Ibovespa Top 10, Bancos, etc.)
+        - **By Sector** (multi-sector filter)
+        - **Custom Selection** (pick any of 79 stocks)
+        """)
+    with cgs2:
+        st.markdown("""
+        **2️⃣ SET PROFILE**
+
+        - **Conservative** — favor quality, low vol
+        - **Moderate** — balanced approach
+        - **Aggressive** — favor momentum, growth
+        """)
+    with cgs3:
+        st.markdown("""
+        **3️⃣ RUN ANALYSIS**
+
+        Click **▶ RUN ANALYSIS** in the sidebar.
+        The engine processes all data in ~30 seconds.
+        """)
 
     st.markdown("---")
-    edu_box("""
-    <strong>💡 ABOUT THIS TERMINAL</strong><br><br>
-    Built for institutional asset managers, this terminal applies institutional-grade quant techniques
-    to the Brazilian equity universe (B3). The engine combines <code>Random Forest</code> machine learning,
-    <code>Monte Carlo</code> portfolio optimization (10,000 simulations), and multi-factor scoring with
-    walk-forward validation to avoid look-ahead bias.<br><br>
+    edu_box(f"""
+    <strong>💡 B3 UNIVERSE DATABASE</strong><br><br>
+    This terminal includes a curated database of <strong>{len(B3_UNIVERSE)} Brazilian stocks</strong>
+    across <strong>{len(get_all_sectors())} sectors</strong>: Financial Services, Energy, Utilities,
+    Basic Materials, Consumer Defensive, Industrials, Consumer Cyclical, Healthcare,
+    Communication Services, Technology, and Real Estate.<br><br>
+    The engine combines <code>Random Forest</code> machine learning (with multi-factor features:
+    market + fundamentals), <code>Monte Carlo</code> portfolio optimization (10,000 simulations),
+    and walk-forward validation to avoid look-ahead bias — institutional-grade methodology.<br><br>
     <strong>Project:</strong> FGV — IA Aplicada ao Mercado Financeiro | Line 3.5 (Generative AI applied to Finance)
     """)
     st.stop()
